@@ -5,7 +5,7 @@ OBJDIR = obj
 LIBDIR = lib
 INCDIR = include 
 
-LIBS   = 
+LIBS   = -lPocoFoundation -lPocoUtil
 ARCHIVE = $(shell date +%Y%m%d)_$(TARGET).tgz
 
 GIT = git
