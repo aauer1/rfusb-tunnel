@@ -6,6 +6,8 @@
  */
 #pragma once
 
+#include "serial.h"
+
 #include <Poco/Util/ServerApplication.h>
 #include <Poco/Logger.h>
 
@@ -19,6 +21,9 @@ class Tunnel : public Poco::Util::ServerApplication
     protected:
         Poco::Logger *logger_;
         bool help_;
+
+        Serial serial_;
+        std::string dev_;
 
         std::string interface_;
         int tun_fd_;
@@ -41,5 +46,7 @@ class Tunnel : public Poco::Util::ServerApplication
 
     private:
         int open(const std::string &name, int flags);
+
+        std::string memdump(const uint8_t *data, uint32_t size) const;
 
 };

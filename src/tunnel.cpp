@@ -6,6 +6,8 @@
  */
 
 #include "tunnel.h"
+#include "frame.h"
+#include "utils.h"
 
 #include <Poco/ConsoleChannel.h>
 #include <Poco/PatternFormatter.h>
@@ -16,6 +18,7 @@
 
 #include <iostream>
 #include <sstream>
+#include <deque>
 
 #include <signal.h>
 #include <sys/ioctl.h>
@@ -42,6 +45,7 @@ static void signalHandler(int sig)
 //------------------------------------------------------------------------------
 Tunnel::Tunnel() :
     help_(false),
+    dev_("/dev/ttyACM0"),
     interface_("tun0"),
     tun_fd_(-1),
     terminate_(false)
@@ -77,10 +81,21 @@ void Tunnel::initialize(Poco::Util::Application &app)
 {
     ServerApplication::initialized();
 
+    if(help_)
+    {
+        return;
+    }
+
     tun_fd_ = open(interface_, IFF_TUN | IFF_NO_PI);
     if(tun_fd_ < 0)
     {
         logger_->error("Failed to alloc the tunnel interface: %s", interface_);
+        return;
+    }
+
+    if(serial_.open(dev_, 115200) == false)
+    {
+        logger_->error("Cannot open serial device: %s", dev_);
         return;
     }
 }
@@ -93,6 +108,8 @@ void Tunnel::uninitialize()
     {
         close(tun_fd_);
     }
+
+    serial_.close();
 }
 
 //------------------------------------------------------------------------------
@@ -107,6 +124,8 @@ void Tunnel::defineOptions(Poco::Util::OptionSet &options)
     options.addOption(Option("debug", "d", "Specify a debug level")
             .argument("<Level>", true));
     options.addOption(Option("interface", "i", "Specify the tun interface (default: tun0)")
+            .argument("<Interface>", true));
+    options.addOption(Option("serial", "s", "Specify the serial device (default: /dev/ttyACM0)")
             .argument("<Interface>", true));
 }
 
@@ -129,6 +148,10 @@ void Tunnel::handleOption(const std::string &name, const std::string &value)
     {
         interface_ = value;
     }
+    else if(name == "serial")
+    {
+        dev_ = value;
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -148,30 +171,64 @@ int Tunnel::main(const std::vector<std::string> &args)
     struct timeval timeout;
     uint8_t buffer[2048];
 
+    std::vector<uint8_t> serial_buf;
+
+    int serial_fd = serial_.getFd();
+
     while(!terminate_)
     {
         FD_ZERO(&readfds);
         FD_SET(tun_fd_, &readfds);
+        FD_SET(serial_fd, &readfds);
         timeout.tv_sec = 1;
         timeout.tv_usec = 0;
 
-        int ret = select(tun_fd_ + 1, &readfds, NULL, NULL, &timeout);
+        int ret = select((serial_fd > tun_fd_) ? serial_fd + 1 : tun_fd_ + 1, &readfds, NULL, NULL, &timeout);
         if(ret > 0)
         {
-            int len = read(tun_fd_, buffer, sizeof(buffer));
-            logger_->information("Read %?d bytes", len);
-            if(len > 0)
+            if(FD_ISSET(tun_fd_, &readfds))
             {
-                stringstream ss;
-                for(int i=0; i<len; i++)
+                int len = read(tun_fd_, buffer, sizeof(buffer));
+                logger_->information("%?d bytes read from tun", len);
+                if(len > 0)
                 {
-                    if(i % 16 == 0)
-                    {
-                        ss << endl;
-                    }
-                    ss << NumberFormatter::formatHex(buffer[i], 2, false) << " ";
+                    vector<uint8_t> data;
+
+                    Frame frame(Frame::CMD_SEND);
+                    frame.setData(buffer, len);
+                    frame.serialize(data);
+
+                    logger_->information("%s", Utils::hexDump(deque<uint8_t>(data.begin(), data.end())));
+                    serial_.send(data.data(), data.size());
                 }
-                logger_->information(ss.str());
+            }
+            else if(FD_ISSET(serial_fd, &readfds))
+            {
+                int len = serial_.receive(buffer, sizeof(buffer));
+                logger_->information("%?d bytes read from serial", len);
+                if(len > 0)
+                {
+                    serial_buf.insert(serial_buf.end(), buffer, buffer + len);
+                    logger_->information("%s", Utils::hexDump(std::deque<uint8_t>(buffer, buffer + len)));
+
+                    Frame *f = Frame::deserialize(serial_buf.data(), serial_buf.size());
+                    if(f != nullptr)
+                    {
+                        logger_->information("%s", f->toString());
+                    }
+
+                    if(f != nullptr && f->getCommand() == Frame::CMD_RECEIVE)
+                    {
+                        vector<uint8_t> d = f->getData();
+                        write(tun_fd_, d.data(), d.size());
+                        delete f;
+                    }
+                }
+                else
+                {
+                    logger_->warning("Serial interface closed");
+                    break;
+                }
             }
         }
         else if(ret < 0)
@@ -209,3 +266,4 @@ int Tunnel::open(const std::string &name, int flags)
 
     return fd;
 }
+
