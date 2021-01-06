@@ -127,7 +127,7 @@ class Frame
             }
 
             uint32_t len = data[2] | (data[3] << 8);
-            if(size < len)
+            if(size < (len + 5))
             {
                 return nullptr;
             }

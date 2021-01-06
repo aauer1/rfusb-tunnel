@@ -7,13 +7,14 @@
 #pragma once
 
 #include "serial.h"
+#include "protocol.h"
 
 #include <Poco/Util/ServerApplication.h>
 #include <Poco/Logger.h>
 
 #include <string>
 
-class Tunnel : public Poco::Util::ServerApplication
+class Tunnel : public Poco::Util::ServerApplication, public Protocol::Listener
 {
     private:
         static const std::string DEVICE;
@@ -22,7 +23,8 @@ class Tunnel : public Poco::Util::ServerApplication
         Poco::Logger *logger_;
         bool help_;
 
-        Serial serial_;
+        Protocol *protocol_;
+        Serial *serial_;
         std::string dev_;
 
         std::string interface_;
@@ -35,6 +37,7 @@ class Tunnel : public Poco::Util::ServerApplication
         virtual ~Tunnel();
 
         void terminate();
+        virtual void onFrameReceived(Frame *f);
 
     protected:
         virtual void initialize(Poco::Util::Application &app);
